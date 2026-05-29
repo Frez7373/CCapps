@@ -1,0 +1,101 @@
+local MODEM_SIDE = "top" 
+
+rednet.open(MODEM_SIDE)
+
+local function findServers()
+    local ids = { rednet.lookup("cloud_disk") }
+    if #ids == 1 and type(ids[1]) == "number" then return ids end
+    if #ids == 0 or ids[1] == nil then return {} end
+    return ids
+end
+
+local serverIDs = findServers()
+if #serverIDs == 0 then
+    print("Error: No Cloud Servers found!")
+    return
+end
+
+print("Connected to " .. #serverIDs .. " Server(s).")
+write("Username: ")
+local username = read()
+write("Password: ")
+local password = read("*") 
+
+local function sendRequest(payload, requireAll)
+    payload.username = username
+    payload.password = password
+    serverIDs = findServers()
+    
+    if #serverIDs == 0 then
+        print("Error: All servers offline!")
+        return nil
+    end
+
+    if requireAll then
+        local lastResponse = nil
+        for _, sID in ipairs(serverIDs) do
+            rednet.send(sID, payload, "cloud_disk")
+            local id, response = rednet.receive("cloud_disk", 1.5)
+            if response then lastResponse = response end
+        end
+        return lastResponse
+    else
+        for _, sID in ipairs(serverIDs) do
+            rednet.send(sID, payload, "cloud_disk")
+            local id, response = rednet.receive("cloud_disk", 1.5)
+            if response then return response end
+        end
+        print("Error: Timeout.")
+        return nil
+    end
+end
+
+local function printHelp()
+    print("\nCommands: register, list, upload <f>, download <f>, delete <f>, exit")
+end
+
+printHelp()
+
+while true do
+    write("\n" .. username .. "@cloud> ")
+    local input = read()
+    local parts = {}
+    for word in input:gmatch("%S+") do table.insert(parts, word) end
+    local command = parts[1]
+    local argument = parts[2]
+
+    if command == "exit" then break
+    elseif command == "register" then
+        local res = sendRequest({action = "register"}, true)
+        if res then print(res.success and "Success" or "Error: " .. tostring(res.error)) end
+    elseif command == "list" then
+        local res = sendRequest({action = "list"}, false)
+        if res and res.success then
+            for _, filename in ipairs(res.files) do print("- " .. filename) end
+        end
+    elseif command == "upload" then
+        if not argument or not fs.exists(argument) then print("Invalid file")
+        else
+            local file = fs.open(argument, "r")
+            local content = file.readAll()
+            file.close()
+            local res = sendRequest({action = "upload", filename = argument, content = content}, true)
+            if res then print(res.msg or "Uploaded") end
+        end
+    elseif command == "download" then
+        if not argument then print("Usage: download <filename>")
+        else
+            local res = sendRequest({action = "download", filename = argument}, false)
+            if res and res.success then
+                local file = fs.open(argument, "w")
+                file.write(res.content)
+                file.close()
+                print("Downloaded successfully.")
+            else print("File not found on any online server.") end
+        end
+    elseif command == "delete" then
+        if argument then sendRequest({action = "delete", filename = argument}, true) end
+    else
+        printHelp()
+    end
+end
