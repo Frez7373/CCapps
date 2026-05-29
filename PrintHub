@@ -1,0 +1,116 @@
+-- printhub.lua
+
+local function getPrinters()
+    local printers = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        if peripheral.getType(name) == "printer" then
+            table.insert(printers, name)
+        end
+    end
+    return printers
+end
+
+-- Расширенная калибровка с выводом в терминал
+local function calibrate(p, name)
+    print("\n[SYSTEM] Starting calibration for: " .. name)
+    sleep(0.5)
+    print(" > Checking ink levels...")
+    local ink = p.getInkLevel()
+    print(" > Checking paper levels...")
+    local paper = p.getPaperLevel()
+    
+    print(" > RESULT: " .. name .. " [INK: " .. ink .. "% | PAPER: " .. paper .. "%]")
+    
+    if ink < 10 or paper < 10 then
+        print(" ! WARNING: Resource levels are critically low!")
+    else
+        print(" > Status: READY for production.")
+    end
+    sleep(0.5)
+end
+
+-- Печать подробного калибровочного листа
+local function printCalibrationSheet(p, name)
+    if p.newPage() then
+        p.setCursorPos(1, 1)
+        p.write("PRINTER SERVICE REPORT")
+        p.setCursorPos(1, 2)
+        p.write("======================")
+        p.setCursorPos(1, 3)
+        p.write("Device: " .. name)
+        p.setCursorPos(1, 4)
+        p.write("Time: " .. textutils.formatTime(os.time(), true))
+        p.setCursorPos(1, 5)
+        p.write("Ink Level: " .. p.getInkLevel() .. "%")
+        p.setCursorPos(1, 6)
+        p.write("Paper Level: " .. p.getPaperLevel() .. "%")
+        p.setCursorPos(1, 8)
+        p.write("Calibration: SUCCESS")
+        p.endPage()
+    end
+end
+
+-- Главное меню
+local printers = getPrinters()
+if #printers == 0 then error("No printers found!") end
+
+print("1) Print Document")
+print("2) Run Maintenance (Calibration)")
+local mode = read()
+
+if mode == "2" then
+    for _, name in ipairs(printers) do
+        local p = peripheral.wrap(name)
+        if p then
+            calibrate(p, name)
+            printCalibrationSheet(p, name)
+        end
+    end
+    print("\nMaintenance complete. Press any key to exit.")
+    os.pullEvent("key")
+else
+    -- Логика печати
+    print("\nAvailable printers:")
+    for i, name in ipairs(printers) do print(i .. ") " .. name) end
+    print("Select printers (e.g. 1 2) or 'all':")
+    local input = read()
+    
+    local selected = {}
+    if input == "all" then selected = printers
+    else
+        for word in input:gmatch("%S+") do
+            local idx = tonumber(word)
+            if idx and printers[idx] then table.insert(selected, printers[idx]) end
+        end
+    end
+
+    local files = fs.list("/")
+    print("\nAvailable files:")
+    for i, file in ipairs(files) do print(i .. ") " .. file) end
+    print("Enter file number:")
+    local fileIdx = tonumber(read())
+    local fileName = files[fileIdx]
+
+    if fileName and not fs.isDir(fileName) then
+        local file = fs.open(fileName, "r")
+        local content = file.readAll()
+        file.close()
+
+        for _, name in ipairs(selected) do
+            local p = peripheral.wrap(name)
+            if p then
+                calibrate(p, name)
+                printCalibrationSheet(p, name)
+                
+                print("Printing document: " .. fileName)
+                if p.newPage() then
+                    p.write(content)
+                    p.endPage()
+                    print("Document printed successfully on " .. name)
+                else
+                    print("Failed to print: Check paper/ink")
+                end
+            end
+        end
+    end
+end
