@@ -13,7 +13,7 @@ You can install all components at once using the automated installer.
 
 1. Open your CC:Tweaked computer terminal.
 2. Run the following command to download the installer:
-   `wget run https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/install.lua`
+   `wget run https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/Installer.lua`
 3. Follow the on-screen instructions.
 
 ## Requirements
