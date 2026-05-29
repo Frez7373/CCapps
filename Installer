@@ -1,0 +1,31 @@
+-- Список файлов для установки
+-- Формат: { url = "ссылка", path = "путь_сохранения" }
+local files = {
+    { url = "https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/CloudClient", path = "CloudClient" },
+    { url = "https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/CloudServer", path = "CloudServer" },
+    { url = "https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/Cloudnet", path = "Cloudnet" },
+    { url = "https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/PrintHub", path = "PrintHub" }
+}
+
+print("Начинаю загрузку компонентов...")
+
+for _, file in ipairs(files) do
+    write("Загрузка " .. file.path .. "... ")
+    
+    local response = http.get(file.url)
+    
+    if response then
+        local content = response.readAll()
+        response.close()
+        
+        local f = fs.open(file.path, "w")
+        f.write(content)
+        f.close()
+        
+        print("Готово!")
+    else
+        print("Ошибка! Не удалось скачать " .. file.path)
+    end
+end
+
+print("\nВсе компоненты успешно установлены!")
