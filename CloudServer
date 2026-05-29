@@ -1,0 +1,211 @@
+local MODEM_SIDE = "top" -- Измените на вашу сторону модема
+local ACCOUNTS_FILE = "accounts.txt"
+local SYNC_INTERVAL = 30 -- Интервал синхронизации в секундах
+
+rednet.open(MODEM_SIDE)
+local myID = os.getComputerID()
+local serverName = "server_" .. myID
+rednet.host("cloud_disk", serverName)
+
+print("[-] Cloud Server #" .. myID .. " started...")
+
+-- Загрузка аккаунтов
+local accounts = {}
+if fs.exists(ACCOUNTS_FILE) then
+    local file = fs.open(ACCOUNTS_FILE, "r")
+    accounts = textutils.unserialize(file.readAll()) or {}
+    file.close()
+else
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+local function saveAccounts()
+    local file = fs.open(ACCOUNTS_FILE, "w")
+    file.write(textutils.serialize(accounts))
+    file.close()
+end
+
+local function getUserPath(username)
+    local peripherals = peripheral.getNames()
+    for _, name in ipairs(peripherals) do
+        if peripheral.getType(name) == "drive" and disk.isPresent(name) then
+            local mountPath = disk.getMountPath(name)
+            if mountPath then return mountPath .. "/user_" .. username end
+        end
+    end
+    return "cloud_storage/user_" .. username
+end
+
+-- Функция сбора информации о свободном месте
+local function getStorageInfo()
+    local peripherals = peripheral.getNames()
+    for _, name in ipairs(peripherals) do
+        if peripheral.getType(name) == "drive" and disk.isPresent(name) then
+            local path = disk.getMountPath(name)
+            if path then return fs.getFreeSpace(path), "Disk Drive" end
+        end
+    end
+    return fs.getFreeSpace("/"), "Internal"
+end
+
+-- === ФОНОВАЯ СИНХРОНИЗАЦИЯ (МЕЖДУ СЕРВЕРАМИ) ===
+local function backgroundSync()
+    while true do
+        sleep(SYNC_INTERVAL)
+        print("[Sync] Starting cluster synchronization...")
+        
+        local allServers = { rednet.lookup("cloud_disk") }
+        if #allServers == 1 and type(allServers[1]) == "number" then allServers = {allServers[1]} end
+        
+        for _, sID in ipairs(allServers) do
+            if sID ~= myID then
+                -- 1. Синхронизируем аккаунты
+                rednet.send(sID, {action = "cluster_sync_accounts", accounts = accounts}, "cloud_disk")
+                
+                -- 2. Синхронизируем файлы для каждого известного пользователя
+                for username, _ in pairs(accounts) do
+                    local userPath = getUserPath(username)
+                    local localFiles = fs.exists(userPath) and fs.list(userPath) or {}
+                    
+                    rednet.send(sID, {
+                        action = "cluster_check_files", 
+                        username = username, 
+                        files = localFiles
+                    }, "cloud_disk")
+                end
+            end
+        end
+    end
+end
+
+-- === ОБРАБОТКА СЕТЕВЫХ КОМАНД ===
+local function handleRequests()
+    while true do
+        local id, message = rednet.receive("cloud_disk")
+        
+        if type(message) == "table" and message.action then
+            local action = message.action
+
+            -- Отвечаем приложению мониторинга
+            if action == "get_monitor_stats" then
+                local freeSpace, sType = getStorageInfo()
+                local totalFiles = 0
+                for u, _ in pairs(accounts) do
+                    local p = getUserPath(u)
+                    if fs.exists(p) then totalFiles = totalFiles + #fs.list(p) end
+                end
+                rednet.send(id, {
+                    id = myID,
+                    users_count = #textutils.tabulate(accounts), -- примерный подсчет
+                    free_space = freeSpace,
+                    storage_type = sType,
+                    files_count = totalFiles
+                }, "cloud_disk")
+
+            -- Системная синхронизация аккаунтов от соседа
+            elseif action == "cluster_sync_accounts" then
+                local changed = false
+                for u, p in pairs(message.accounts) do
+                    if not accounts[u] then
+                        accounts[u] = p
+                        fs.makeDir(getUserPath(u))
+                        changed = true
+                    end
+                end
+                if changed then saveAccounts() end
+
+            -- Системная проверка недостающих файлов
+            elseif action == "cluster_check_files" then
+                local userPath = getUserPath(message.username)
+                if fs.exists(userPath) then
+                    local myFiles = fs.list(userPath)
+                    local myFilesMap = {}
+                    for _, f in ipairs(myFiles) do myFilesMap[f] = true end
+                    
+                    -- Если у соседа есть файлы, которых нет у нас — запрашиваем их
+                    for _, f in ipairs(message.files) do
+                        if not myFilesMap[f] then
+                            rednet.send(id, {action = "cluster_request_file", username = message.username, filename = f}, "cloud_disk")
+                        end
+                    end
+                end
+
+            -- Сосед запросил файл, отправляем его
+            elseif action == "cluster_request_file" then
+                local filePath = getUserPath(message.username) .. "/" .. message.filename
+                if fs.exists(filePath) then
+                    local file = fs.open(filePath, "r")
+                    local content = file.readAll()
+                    file.close()
+                    rednet.send(id, {
+                        action = "cluster_transfer_file", 
+                        username = message.username, 
+                        filename = message.filename, 
+                        content = content
+                    }, "cloud_disk")
+                end
+
+            -- Получаем файл от соседа в рамках синхронизации
+            elseif action == "cluster_transfer_file" then
+                local userPath = getUserPath(message.username)
+                fs.makeDir(userPath)
+                local file = fs.open(userPath .. "/" .. message.filename, "w")
+                if file then
+                    file.write(message.content)
+                    file.close()
+                    print("[Sync] Downloaded missing file: " .. message.filename .. " for " .. message.username)
+                end
+
+            -- --- СТАНДАРТНЫЕ КОМАНДЫ ПОЛЬЗОВАТЕЛЕЙ ---
+            else
+                local user = message.username
+                local pass = message.password
+
+                if action == "register" then
+                    if accounts[user] then
+                        rednet.send(id, {success = true, msg = "Account exists"}, "cloud_disk")
+                    else
+                        accounts[user] = pass
+                        saveAccounts()
+                        fs.makeDir(getUserPath(user))
+                        rednet.send(id, {success = true, msg = "Registered successfully"}, "cloud_disk")
+                    end
+                elseif accounts[user] and accounts[user] == pass then
+                    local userPath = getUserPath(user)
+                    
+                    if action == "list" then
+                        rednet.send(id, {success = true, files = fs.exists(userPath) and fs.list(userPath) or {}}, "cloud_disk")
+                    elseif action == "upload" then
+                        fs.makeDir(userPath)
+                        local file = fs.open(userPath .. "/" .. message.filename, "w")
+                        if file then
+                            file.write(message.content)
+                            file.close()
+                            rednet.send(id, {success = true, msg = "Uploaded"}, "cloud_disk")
+                        else
+                            rednet.send(id, {success = false, error = "Write error"}, "cloud_disk")
+                        end
+                    elseif action == "download" then
+                        local filePath = userPath .. "/" .. message.filename
+                        if fs.exists(filePath) then
+                            local file = fs.open(filePath, "r")
+                            rednet.send(id, {success = true, content = file.readAll()}, "cloud_disk")
+                            file.close()
+                        else rednet.send(id, {success = false, error = "Not found"}, "cloud_disk") end
+                    elseif action == "delete" then
+                        local filePath = userPath .. "/" .. message.filename
+                        if fs.exists(filePath) then fs.delete(filePath) end
+                        rednet.send(id, {success = true, msg = "Deleted"}, "cloud_disk")
+                    end
+                else
+                    rednet.send(id, {success = false, error = "Auth error"}, "cloud_disk")
+                end
+            end
+        end
+    end
+end
+
+-- Запуск двух потоков одновременно
+parallel.waitForAny(handleRequests, backgroundSync)
