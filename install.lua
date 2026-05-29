@@ -1,4 +1,4 @@
--- Configuration
+-- Cloud Ecosystem Installer
 local files = {
     { url = "https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/CloudClient", path = "CloudClient" },
     { url = "https://raw.githubusercontent.com/Frez7373/CCapps/refs/heads/main/CloudServer", path = "CloudServer" },
@@ -10,19 +10,19 @@ local function drawProgressBar(current, total)
     local width = 20
     local progress = math.floor((current / total) * width)
     local bar = "[" .. string.rep("#", progress) .. string.rep("-", width - progress) .. "]"
-    term.setCursor(1, 3)
-    print("Progress: " .. bar .. " " .. math.floor((current / total) * 100) .. "%")
+    term.setCursorPos(1, 3)
+    write("Progress: " .. bar .. " " .. math.floor((current / total) * 100) .. "%")
 end
 
 term.clear()
-term.setCursor(1, 1)
+term.setCursorPos(1, 1)
 print("--- Cloud Ecosystem Installer ---")
 print("")
 
 for i, file in ipairs(files) do
-    term.setCursor(1, 2)
+    term.setCursorPos(1, 2)
     term.clearLine()
-    print("Downloading: " .. file.path)
+    write("Downloading: " .. file.path)
     drawProgressBar(i - 1, #files)
 
     local response = http.get(file.url)
@@ -35,16 +35,16 @@ for i, file in ipairs(files) do
         f.write(content)
         f.close()
     else
-        term.setCursor(1, 4)
+        term.setCursorPos(1, 4)
         error("Failed to download: " .. file.path)
     end
     
     drawProgressBar(i, #files)
 end
 
-term.setCursor(1, 4)
-print("Installation completed successfully!")
+term.setCursorPos(1, 4)
+print("\nInstallation completed successfully!")
 print("Press any key to exit.")
 os.pullEvent("key")
 term.clear()
-term.setCursor(1, 1)
+term.setCursorPos(1, 1)
